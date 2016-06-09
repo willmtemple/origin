@@ -1,10 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
+	"path"
 	"strings"
 
 	"github.com/docker/distribution"
@@ -12,6 +14,7 @@ import (
 	"github.com/docker/distribution/digest"
 	"github.com/docker/distribution/manifest/schema1"
 	repomw "github.com/docker/distribution/registry/middleware/repository"
+	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/libtrust"
 
 	kapi "k8s.io/kubernetes/pkg/api"
@@ -102,6 +105,9 @@ type repository struct {
 	// if true, the repository will check remote references in the image stream to support pulling "through"
 	// from a remote repository
 	pullthrough bool
+	// if true, the repository will explode the image onto a configured storage medium
+	explode    bool
+	explodeDir string
 	// cachedLayers remembers a mapping of layer digest to repositories recently seen with that image to avoid
 	// having to check every potential upstream repository when a blob request is made. The cache is useful only
 	// when session affinity is on for the registry, but in practice the first pull will fill the cache.
@@ -147,6 +153,8 @@ func newRepositoryWithClient(
 		namespace:        nameParts[0],
 		name:             nameParts[1],
 		pullthrough:      pullthrough,
+		explode:          true,
+		explodeDir:       "/explode",
 		cachedLayers:     cachedLayers,
 	}, nil
 }
@@ -452,6 +460,25 @@ func (r *repository) Put(manifest *schema1.SignedManifest) error {
 		if err := r.Signatures().Put(dgst, signature); err != nil {
 			context.GetLogger(r.ctx).Errorf("error storing signature: %s", err)
 			return err
+		}
+	}
+
+	// Explode images to storage medium
+	if r.explode {
+		blobs := r.Blobs(r.ctx)
+		imgpath := path.Join(r.explodeDir, manifest.Name)
+		for _, fslayer := range manifest.FSLayers {
+			data, err := blobs.Get(r.ctx, fslayer.BlobSum)
+			if err != nil {
+				context.GetLogger(r.ctx).Errorf("failed to get blob: %s", err)
+				return err
+			}
+
+			err = archive.Untar(bytes.NewReader(data), imgpath, nil)
+			if err != nil {
+				context.GetLogger(r.ctx).Errorf("error exploding blob: %s", err)
+				return err
+			}
 		}
 	}
 

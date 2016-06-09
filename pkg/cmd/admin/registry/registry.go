@@ -343,6 +343,9 @@ func RunCmdRegistry(f *clientcmd.Factory, cmd *cobra.Command, out io.Writer, cfg
 					}),
 					SecurityContext: &kapi.SecurityContext{
 						Privileged: &mountHost,
+						Capabilities: &kapi.Capabilities{
+							Add:	[]kapi.Capability{"CHOWN"},
+						},
 					},
 					LivenessProbe:  livenessProbe,
 					ReadinessProbe: readinessProbe,
